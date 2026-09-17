@@ -20,8 +20,9 @@
 #define N 16
 #define SAVE "/home/working/clife3.box"
 
-static uint8_t cur[N][N][N], nxt[N][N][N];
-static int gen, pop, running = 1, auto_on, wrap_on = 1, rule = 1;
+static uint8_t cur[N][N][N], nxt[N][N][N], prev[N][N][N];
+static int gen, pop, last_pop, still, running = 1, auto_on, wrap_on = 1, rule = 1;
+static int delay_ms = 800;
 static int cx = 8, cy = 8, cz = 8;
 static double yaw = 0.7, pitch = 0.45, zoom = 95;
 static int fb = -1;
@@ -230,6 +231,8 @@ static const char *rule_name(void)
 static void step(void)
 {
     int x, y, z;
+    memcpy(prev, cur, sizeof prev);
+    last_pop = pop;
     pop = 0;
     for (z = 0; z < N; z++)
         for (y = 0; y < N; y++)
@@ -242,12 +245,19 @@ static void step(void)
             }
     memcpy(cur, nxt, sizeof cur);
     gen++;
+    if (pop == last_pop)
+        still++;
+    else
+        still = 0;
+    if (pop == 0 || still >= 2)
+        auto_on = 0;
 }
 
 static void clear_world(void)
 {
     memset(cur, 0, sizeof cur);
-    gen = pop = 0;
+    memset(prev, 0, sizeof prev);
+    gen = pop = last_pop = still = 0;
 }
 
 static void seed_rand(int pct)
@@ -394,6 +404,15 @@ static void render(void)
                     cells[n].d = wy * sin(pitch) + wz * cos(pitch);
                     n++;
                 }
+    for (z = 0; z < N; z++)
+        for (y = 0; y < N; y++)
+            for (x = 0; x < N; x++)
+                if (prev[x][y][z] && !cur[x][y][z]) {
+                    int sx, sy;
+                    world_xyz(x, y, z, &wx, &wy, &wz);
+                    if (project(wx, wy, wz, &sx, &sy))
+                        px(sx, sy, rgb565(40, 55, 50));
+                }
     qsort(cells, (size_t)n, sizeof(Cell), cmp_cell);
     for (i = 0; i < n; i++)
         {
@@ -411,7 +430,8 @@ static void render(void)
             line(sx, sy - 4, sx, sy + 4, c);
         }
     }
-    snprintf(bar, sizeof bar, "cLife3 %s %s  g%d p%d", rule_name(), wrap_on ? "torus" : "wall", gen, pop);
+    snprintf(bar, sizeof bar, "cLife3 %s %s  g%d p%d  %dms%s", rule_name(),
+             wrap_on ? "torus" : "wall", gen, pop, delay_ms, auto_on ? "*" : "");
     text(4, 4, bar, C_HI);
     snprintf(bar, sizeof bar, "cur %d %d %d n%d %s", cx, cy, cz, nbor(cx, cy, cz),
              cur[cx][cy][cz] ? "on" : "off");
@@ -467,13 +487,16 @@ int main(void)
     C_DIM = rgb565(16, 20, 24);
     C_HI = rgb565(80, 230, 120);
     srand((unsigned)time(NULL));
-    seed_rand(12);
+    seed_rand(7);
     raw(1);
     render();
     while (running) {
         unsigned char ch = 0;
         fd_set rf;
-        struct timeval tv = {0, auto_on ? 180000 : 40000};
+        struct timeval tv;
+        long us = auto_on ? (long)delay_ms * 1000L : 40000;
+        tv.tv_sec = us / 1000000L;
+        tv.tv_usec = us % 1000000L;
         FD_ZERO(&rf);
         FD_SET(0, &rf);
         if (select(1, &rf, NULL, NULL, &tv) > 0)
@@ -517,7 +540,7 @@ int main(void)
             auto_on ^= 1;
             render();
         } else if (ch == 'r') {
-            seed_rand(12);
+            seed_rand(7);
             render();
         } else if (ch == 'b') {
             seed_block();
@@ -573,6 +596,19 @@ int main(void)
             render();
         } else if (ch == '-') {
             zoom /= 1.12;
+            render();
+        } else if (ch >= '5' && ch <= '8') {
+            seed_rand(ch - '0');
+            render();
+        } else if (ch == '[') {
+            delay_ms += 200;
+            if (delay_ms > 4000)
+                delay_ms = 4000;
+            render();
+        } else if (ch == ']') {
+            delay_ms -= 200;
+            if (delay_ms < 200)
+                delay_ms = 200;
             render();
         }
     }
